@@ -56,7 +56,7 @@ private struct Layout {
 }
 
 final class OverlayView: NSView {
-    private let layouts: [Layout]
+    private var layouts: [Layout]
     private let backdrop: CGImage?
     var onDismiss: (() -> Void)?
 
@@ -64,6 +64,11 @@ final class OverlayView: NSView {
         layouts = blocks.map { Layout.make($0, maxX: size.width) }
         self.backdrop = backdrop
         super.init(frame: CGRect(origin: .zero, size: size))
+    }
+
+    func setBlocks(_ blocks: [RenderBlock]) {
+        layouts = blocks.map { Layout.make($0, maxX: bounds.width) }
+        needsDisplay = true
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -94,8 +99,13 @@ final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
-    init(screenFrame: CGRect, blocks: [RenderBlock], onDismiss: @escaping () -> Void) {
+    private let clickThrough: Bool
+
+    /// With `clickThrough` the overlay ignores the mouse so the app underneath stays usable (live mode).
+    init(screenFrame: CGRect, blocks: [RenderBlock], clickThrough: Bool = false, onDismiss: @escaping () -> Void) {
+        self.clickThrough = clickThrough
         super.init(contentRect: screenFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        ignoresMouseEvents = clickThrough
         isFloatingPanel = true
         hidesOnDeactivate = false
         level = .screenSaver
@@ -113,14 +123,31 @@ final class OverlayWindow: NSPanel {
 
     func present() {
         orderFrontRegardless()
+        guard !clickThrough else { return }  // keep keyboard focus in the app underneath
         makeKey()
         makeFirstResponder(contentView)
+    }
+
+    func setBlocks(_ blocks: [RenderBlock]) {
+        (contentView as? OverlayView)?.setBlocks(blocks)
+    }
+
+    /// Hides instantly (stale text over moving content looks broken) and fades back in.
+    func setContentVisible(_ visible: Bool) {
+        if visible {
+            NSAnimationContext.runAnimationGroup { $0.duration = 0.12; animator().alphaValue = 1 }
+        } else {
+            alphaValue = 0
+        }
     }
 }
 
 /// Brief floating message, for "nothing found" style feedback.
 enum Toast {
     private static var window: NSWindow?
+
+    /// So live mode can leave the toast out of its captures.
+    static var windowID: CGWindowID? { window.map { CGWindowID($0.windowNumber) } }
 
     static func show(_ message: String) {
         window?.close()

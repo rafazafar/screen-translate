@@ -5,7 +5,9 @@ A macOS menu-bar app that translates everything on your screen in place, like An
 - Global hotkey (default `⌃⌥T`, changeable from the menu bar icon)
 - Whole-screen capture on every display, OCR with Apple Vision, translation with Apple's on-device Translation framework
 - Default Japanese → English; any pair from the menu works, plus Swap
-- Dismiss with Esc, a click, a scroll, or the hotkey again
+- **Live mode** (on by default): the overlay is click-through and re-translates after you scroll or the screen changes; translations are cached so repeated text is instant
+- Dismiss with Esc or the hotkey again (one-shot mode also dismisses on click or scroll)
+- Opening the app while it runs shows the hotkey recorder, handy when the menu-bar icon hides behind the notch
 
 Requires macOS 26 and Xcode's command-line tools.
 
@@ -30,4 +32,4 @@ Runs OCR, translation and overlay on an image and writes the result to `out.png`
 
 ## Limits
 
-Vertical text isn't grouped into paragraphs, original fonts and weights aren't matched, and OCR is tuned for 2× Retina captures.
+In live mode, text hides while the screen moves and returns ~0.3 s after it settles; a playing video keeps it hidden. Vertical text isn't grouped into paragraphs, original fonts and weights aren't matched, and OCR is tuned for 2× Retina captures.

@@ -65,6 +65,12 @@ final class Settings {
         set { defaults.set(newValue, forKey: "language.source"); NotificationCenter.default.post(name: Settings.changed, object: nil) }
     }
 
+    /// Keep the overlay up and re-translate as the screen changes.
+    var liveMode: Bool {
+        get { defaults.object(forKey: "liveMode") as? Bool ?? true }
+        set { defaults.set(newValue, forKey: "liveMode"); NotificationCenter.default.post(name: Settings.changed, object: nil) }
+    }
+
     var targetCode: String {
         get { defaults.string(forKey: "language.target") ?? "en" }
         set { defaults.set(newValue, forKey: "language.target"); NotificationCenter.default.post(name: Settings.changed, object: nil) }

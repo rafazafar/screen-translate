@@ -6,14 +6,21 @@ final class HotKeyManager {
     static let shared = HotKeyManager()
 
     var handler: (() -> Void)?
+    /// Fired by the temporary Esc hotkey, registered only while an overlay is up.
+    var escapeHandler: (() -> Void)?
     private var ref: EventHotKeyRef?
+    private var escapeRef: EventHotKeyRef?
     private var handlerInstalled = false
+
+    private static let signature = OSType(0x53545241)  // 'STRA'
+    private static let mainID: UInt32 = 1
+    private static let escapeID: UInt32 = 2
 
     @discardableResult
     func register(_ hotKey: HotKey) -> Bool {
         unregister()
         installHandlerIfNeeded()
-        let id = EventHotKeyID(signature: OSType(0x53545241), id: 1)  // 'STRA'
+        let id = EventHotKeyID(signature: Self.signature, id: Self.mainID)
         let status = RegisterEventHotKey(hotKey.keyCode, hotKey.modifiers, id, GetApplicationEventTarget(), 0, &ref)
         return status == noErr
     }
@@ -23,11 +30,30 @@ final class HotKeyManager {
         ref = nil
     }
 
+    /// Grabs Esc globally, so the overlay can be dismissed even when it is click-through.
+    func registerEscape() {
+        guard escapeRef == nil else { return }
+        installHandlerIfNeeded()
+        let id = EventHotKeyID(signature: Self.signature, id: Self.escapeID)
+        RegisterEventHotKey(UInt32(kVK_Escape), 0, id, GetApplicationEventTarget(), 0, &escapeRef)
+    }
+
+    func unregisterEscape() {
+        if let escapeRef { UnregisterEventHotKey(escapeRef) }
+        escapeRef = nil
+    }
+
     private func installHandlerIfNeeded() {
         guard !handlerInstalled else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ in
-            DispatchQueue.main.async { HotKeyManager.shared.handler?() }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+            var hotKeyID = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+            let isEscape = hotKeyID.id == HotKeyManager.escapeID
+            DispatchQueue.main.async {
+                if isEscape { HotKeyManager.shared.escapeHandler?() } else { HotKeyManager.shared.handler?() }
+            }
             return noErr
         }, 1, &spec, nil, nil)
         handlerInstalled = true

@@ -2,17 +2,20 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let recorder = HotKeyRecorder()
     private var overlays: [OverlayWindow] = []
+    private var live: LiveTranslator?
     private var downloadWindow: NSWindow?
     private var busy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        setIcon(busy: false)
+        updateIcon()
         rebuildMenu()
         HotKeyManager.shared.handler = { [weak self] in self?.translateScreen() }
+        HotKeyManager.shared.escapeHandler = { [weak self] in self?.dismissOverlays() }
         registerHotKey()
         NotificationCenter.default.addObserver(forName: Settings.changed, object: nil, queue: .main) { [weak self] _ in
             self?.rebuildMenu()
@@ -28,8 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: Menu
 
-    private func setIcon(busy: Bool) {
-        let name = busy ? "hourglass" : "character.bubble"
+    private func updateIcon() {
+        let name = busy ? "hourglass" : live != nil ? "character.bubble.fill" : "character.bubble"
         statusItem.button?.image = NSImage(systemSymbolName: name, accessibilityDescription: "Screen Translate")
     }
 
@@ -38,6 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         menu.addItem(withTitle: "Translate Screen   \(settings.hotKey.display)", action: #selector(translateScreen), keyEquivalent: "").target = self
+        let liveItem = menu.addItem(withTitle: "Live Mode (follows scrolling)", action: #selector(toggleLiveMode), keyEquivalent: "")
+        liveItem.target = self
+        liveItem.state = settings.liveMode ? .on : .off
         menu.addItem(.separator())
         menu.addItem(withTitle: "Change Hotkey…", action: #selector(changeHotKey), keyEquivalent: "").target = self
 
@@ -71,6 +77,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func pickSource(_ sender: NSMenuItem) { Settings.shared.sourceCode = sender.representedObject as? String ?? "ja" }
     @objc private func pickTarget(_ sender: NSMenuItem) { Settings.shared.targetCode = sender.representedObject as? String ?? "en" }
+
+    @objc private func toggleLiveMode() {
+        dismissOverlays()
+        Settings.shared.liveMode.toggle()
+    }
 
     @objc private func swapLanguages() {
         let s = Settings.shared
@@ -116,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Translate
 
     @objc private func translateScreen() {
-        if !overlays.isEmpty { dismissOverlays(); return }
+        if !overlays.isEmpty || live != nil { dismissOverlays(); return }
         guard !busy else { return }
         guard CGPreflightScreenCaptureAccess() else {
             // System prompt only: an NSAlert would activate this app and can make macOS switch Spaces.
@@ -126,15 +137,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         busy = true
-        setIcon(busy: true)
+        updateIcon()
         let source = Languages.find(Settings.shared.sourceCode)
         let target = Languages.find(Settings.shared.targetCode)
         let infos = NSScreen.screens.compactMap(ScreenInfo.init)
+        let liveMode = Settings.shared.liveMode
 
         Task { @MainActor in
-            defer { busy = false; setIcon(busy: false) }
+            defer { busy = false; updateIcon() }
             do {
                 let session = try await Pipeline.makeSession(source: source, target: target)
+                if liveMode {
+                    let translator = LiveTranslator(source: source, target: target, session: session)
+                    live = translator
+                    HotKeyManager.shared.registerEscape()
+                    try await translator.start(infos: infos)
+                    return
+                }
+
                 var captures: [(ScreenInfo, CGImage)] = []
                 for info in infos { captures.append((info, try await Pipeline.capture(info))) }
 
@@ -152,17 +172,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     overlays.append(window)
                 }
                 overlays.forEach { $0.present() }
+                HotKeyManager.shared.registerEscape()
             } catch PipelineError.languagesNotInstalled {
+                dismissOverlays()
                 downloadLanguages()
             } catch {
+                dismissOverlays()
                 alert("Translation failed", error.localizedDescription)
             }
         }
     }
 
     private func dismissOverlays() {
+        live?.stop()
+        live = nil
         overlays.forEach { $0.close() }
         overlays.removeAll()
+        HotKeyManager.shared.unregisterEscape()
+        updateIcon()
     }
 
     // MARK: Language download
@@ -231,8 +258,10 @@ if let i = CommandLine.arguments.firstIndex(of: "--test"), CommandLine.arguments
     RunLoop.main.run()
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.setActivationPolicy(.accessory)
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+}

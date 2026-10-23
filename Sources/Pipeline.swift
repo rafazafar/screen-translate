@@ -45,15 +45,31 @@ enum Pipeline {
     // MARK: Capture
 
     static func capture(_ info: ScreenInfo) async throws -> CGImage {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        try await capture(makeFilter(info))
+    }
+
+    /// A filter for one display, leaving out the given windows (our own overlays).
+    static func makeFilter(_ info: ScreenInfo, excluding windowIDs: [CGWindowID] = []) async throws -> SCContentFilter {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: windowIDs.isEmpty)
         guard let display = content.displays.first(where: { $0.displayID == info.displayID }) else {
             throw PipelineError.noDisplay
         }
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let excluded = content.windows.filter { windowIDs.contains($0.windowID) }
+        return SCContentFilter(display: display, excludingWindows: excluded)
+    }
+
+    /// Full-resolution capture, or a small one `width` pixels wide for change detection.
+    static func capture(_ filter: SCContentFilter, width: Int? = nil) async throws -> CGImage {
         let config = SCStreamConfiguration()
-        let scale = CGFloat(filter.pointPixelScale)
-        config.width = Int(filter.contentRect.width * scale)
-        config.height = Int(filter.contentRect.height * scale)
+        let rect = filter.contentRect
+        if let width {
+            config.width = width
+            config.height = max(1, Int(CGFloat(width) * rect.height / rect.width))
+        } else {
+            let scale = CGFloat(filter.pointPixelScale)
+            config.width = Int(rect.width * scale)
+            config.height = Int(rect.height * scale)
+        }
         config.showsCursor = false
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
     }
@@ -74,7 +90,7 @@ enum Pipeline {
     // MARK: Pipeline
 
     static func process(image: CGImage, pointSize: CGSize, source: Language, target: Language,
-                        session: TranslationSession) async throws -> [RenderBlock] {
+                        session: TranslationSession, cache: TranslationCache? = nil) async throws -> [RenderBlock] {
         let lines = try recognize(image, languages: source.visionCodes + ["en-US"])
         let size = CGSize(width: image.width, height: image.height)
         let joiner = ["ja", "zh-Hans", "zh-Hant"].contains(source.code) ? "" : " "
@@ -82,13 +98,22 @@ enum Pipeline {
             .filter { needsTranslation($0.text, source: source, target: target) }
         guard !groups.isEmpty else { return [] }
 
-        let requests = groups.enumerated().map {
-            TranslationSession.Request(sourceText: $0.element.text, clientIdentifier: String($0.offset))
-        }
-        let responses = try await session.translations(from: requests)
+        // Only send text the cache hasn't seen; in live mode most of the screen repeats.
         var translated: [Int: String] = [:]
-        for r in responses {
-            if let id = r.clientIdentifier, let i = Int(id) { translated[i] = r.targetText }
+        var requests: [TranslationSession.Request] = []
+        for (i, g) in groups.enumerated() {
+            if let hit = cache?[g.text] {
+                translated[i] = hit
+            } else {
+                requests.append(TranslationSession.Request(sourceText: g.text, clientIdentifier: String(i)))
+            }
+        }
+        if !requests.isEmpty {
+            for r in try await session.translations(from: requests) {
+                guard let id = r.clientIdentifier, let i = Int(id) else { continue }
+                translated[i] = r.targetText
+                cache?[groups[i].text] = r.targetText
+            }
         }
 
         let sampler = PixelSampler(image)
