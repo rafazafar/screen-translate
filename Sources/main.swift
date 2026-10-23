@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Opening the app again (e.g. `open ScreenTranslate.app`) shows the hotkey recorder, since the
+    /// menu-bar icon can be hidden behind the notch on a crowded menu bar.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        changeHotKey()
+        return false
+    }
+
     // MARK: Menu
 
     private func setIcon(busy: Bool) {
@@ -112,9 +119,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !overlays.isEmpty { dismissOverlays(); return }
         guard !busy else { return }
         guard CGPreflightScreenCaptureAccess() else {
+            // System prompt only: an NSAlert would activate this app and can make macOS switch Spaces.
             CGRequestScreenCaptureAccess()
-            alert("Screen Recording permission needed",
-                  "Allow Screen Translate in System Settings → Privacy & Security → Screen & System Audio Recording, then quit and reopen the app.")
+            Toast.show("Allow Screen Recording for Screen Translate, then reopen it")
             return
         }
 
@@ -144,7 +151,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     let window = OverlayWindow(screenFrame: info.frame, blocks: blocks) { [weak self] in self?.dismissOverlays() }
                     overlays.append(window)
                 }
-                NSApp.activate()
                 overlays.forEach { $0.present() }
             } catch PipelineError.languagesNotInstalled {
                 downloadLanguages()

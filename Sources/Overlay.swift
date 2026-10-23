@@ -88,12 +88,16 @@ final class OverlayView: NSView {
     }
 }
 
-/// Borderless, transparent window covering one screen.
-final class OverlayWindow: NSWindow {
+/// Borderless, transparent panel covering one screen. It is non-activating so showing it never
+/// makes this app frontmost, which would make macOS rearrange the user's windows or Spaces.
+final class OverlayWindow: NSPanel {
     override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 
     init(screenFrame: CGRect, blocks: [RenderBlock], onDismiss: @escaping () -> Void) {
-        super.init(contentRect: screenFrame, styleMask: .borderless, backing: .buffered, defer: false)
+        super.init(contentRect: screenFrame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = true
+        hidesOnDeactivate = false
         level = .screenSaver
         isOpaque = false
         backgroundColor = .clear
@@ -108,7 +112,8 @@ final class OverlayWindow: NSWindow {
     }
 
     func present() {
-        makeKeyAndOrderFront(nil)
+        orderFrontRegardless()
+        makeKey()
         makeFirstResponder(contentView)
     }
 }
